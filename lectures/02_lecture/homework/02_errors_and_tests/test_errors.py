@@ -1,15 +1,37 @@
 """Тесты к ДЗ 2: Error handling и тестирование."""
 
+import importlib.util
 import sys
-import os
-
-sys.path.insert(0, os.path.dirname(__file__))
+from pathlib import Path
 
 from starlette.testclient import TestClient
 
-from solution import app
+
+_TASK_PATH = Path(__file__).with_name("task.py")
+_SPEC = importlib.util.spec_from_file_location("errors_and_tests_task", _TASK_PATH)
+assert _SPEC and _SPEC.loader
+_TASK_MODULE = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = _TASK_MODULE
+_SPEC.loader.exec_module(_TASK_MODULE)
+app = _TASK_MODULE.app
 
 client = TestClient(app)
+
+
+class TestListItems:
+    def test_list_items_returns_created_items(self):
+        client.post("/items", json={"name": "Первый"})
+        client.post("/items", json={"name": "Второй"})
+
+        resp = client.get("/items")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "items": [
+                {"id": 1, "name": "Первый"},
+                {"id": 2, "name": "Второй"},
+            ]
+        }
 
 
 class TestCreateItem:
@@ -30,6 +52,10 @@ class TestCreateItem:
 
     def test_create_missing_name(self):
         resp = client.post("/items", json={})
+        assert resp.status_code == 422
+
+    def test_create_wrong_name_type(self):
+        resp = client.post("/items", json={"name": 42})
         assert resp.status_code == 422
 
 
@@ -121,6 +147,36 @@ class TestDivide:
     def test_divide_missing_params(self):
         resp = client.get("/divide")
         assert resp.status_code == 422
+
+
+class TestCounter:
+    def test_counter_increments_for_existing_item(self):
+        item_id = client.post("/items", json={"name": "Счётчик"}).json()["id"]
+
+        first = client.get(f"/items/{item_id}/counter")
+        second = client.get(f"/items/{item_id}/counter")
+
+        assert first.json() == {"counter": 1}
+        assert second.json() == {"counter": 2}
+
+    def test_counter_returns_404_for_missing_item(self):
+        resp = client.get("/items/999999/counter")
+        assert resp.status_code == 404
+
+    def test_counter_is_safe_for_concurrent_requests(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        item_id = client.post("/items", json={"name": "Параллельный"}).json()["id"]
+
+        def increment_counter():
+            response = client.get(f"/items/{item_id}/counter")
+            assert response.status_code == 200
+            return response.json()["counter"]
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            counters = list(executor.map(lambda _: increment_counter(), range(10)))
+
+        assert sorted(counters) == list(range(1, 11))
 
 
 class TestSlowSync:
