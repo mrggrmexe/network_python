@@ -13,6 +13,15 @@ multiprocessing.Pool.
    lectures/01_lecture/examples/03_multiprocessing/02_cpu_bound.py
 """
 
+import multiprocessing
+import os
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+# восстанавливаем корректную привязку для pytest
+_THIS_MODULE = sys.modules[__name__]
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 # ═══════════════════════════════════════════════════════════
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ — не меняйте их
@@ -54,8 +63,7 @@ def compute_sequential(numbers: list[int]) -> list[int]:
 
     Просто для сравнения с параллельной версией.
     """
-    # TODO: реализуйте
-    raise NotImplementedError
+    return [heavy_compute(n) for n in numbers]
 
 
 def compute_parallel_pool(numbers: list[int], processes: int = 4) -> list[int]:
@@ -65,8 +73,18 @@ def compute_parallel_pool(numbers: list[int], processes: int = 4) -> list[int]:
         - Использовать Pool(processes) как context manager
         - Результаты в порядке numbers
     """
-    # TODO: реализуйте
-    raise NotImplementedError
+    if sys.path[0] != _THIS_DIR:
+        sys.path.insert(0, _THIS_DIR)
+    previous = sys.modules.get("task")
+    sys.modules["task"] = _THIS_MODULE
+    try:
+        with multiprocessing.Pool(processes) as pool:
+            return pool.map(heavy_compute, numbers)
+    finally:
+        if previous is None:
+            sys.modules.pop("task", None)
+        else:
+            sys.modules["task"] = previous
 
 
 # ═══════════════════════════════════════════════════════════
@@ -79,5 +97,5 @@ def compute_with_threads(numbers: list[int], workers: int = 4) -> list[int]:
 
     Должно работать МЕДЛЕННЕЕ, чем Pool, из-за GIL.
     """
-    # TODO: реализуйте
-    raise NotImplementedError
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(heavy_compute, numbers))
