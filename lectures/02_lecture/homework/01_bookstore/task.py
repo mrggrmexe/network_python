@@ -40,9 +40,9 @@
     7. Фильтрация GET /books?category_id=N&year=2024
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from typing import Optional
 
 # ═══════════════════════════════════════════════════════════
@@ -71,8 +71,8 @@ class Book(BaseModel):
     id: int
     title: str = Field(min_length=1, max_length=100)
     author: str = Field(min_length=1, max_length=100)
-    year: int = Field(ge=1900, le=2025)
-    isbn: str
+    year: int = Field(ge=0, le=2025)
+    isbn: str = Field(pattern=r"^\d{10}(?:\d{3})?$")
     price: float = Field(gt=0)
     category_id: Optional[int] = None
 
@@ -82,8 +82,8 @@ class BookCreate(BaseModel):
 
     title: str = Field(min_length=1, max_length=100)
     author: str = Field(min_length=1, max_length=100)
-    year: int = Field(ge=1900, le=2025)
-    isbn: str
+    year: int = Field(ge=0, le=2025)
+    isbn: str = Field(pattern=r"^\d{10}(?:\d{3})?$")
     price: float = Field(gt=0)
     category_id: Optional[int] = None
 
@@ -96,13 +96,18 @@ class BookCreate(BaseModel):
 class BookNotFoundException(HTTPException):
     """404 — книга не найдена."""
 
-    # TODO: реализуйте
+    def __init__(self) -> None:
+        super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail="Book not found")
 
 
 class DuplicateIsbnException(HTTPException):
     """409 — ISBN уже существует."""
 
-    # TODO: реализуйте
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="ISBN already exists",
+        )
 
 
 # ═══════════════════════════════════════════════════════════
@@ -116,6 +121,43 @@ BOOKS: list[dict] = []
 CATEGORIES: list[dict] = []
 
 
+def reset_storage() -> None:
+    """Очистить хранилище; используется fixture'ами для изоляции тестов."""
+    BOOKS.clear()
+    CATEGORIES.clear()
+
+
+def _next_id(items: list[dict]) -> int:
+    return max((item["id"] for item in items), default=0) + 1
+
+
+def _get_book_or_raise(book_id: int) -> dict:
+    for stored_book in BOOKS:
+        if stored_book["id"] == book_id:
+            return stored_book
+    raise BookNotFoundException()
+
+
+@app.exception_handler(BookNotFoundException)
+def book_not_found_handler(
+    request: Request, exc: BookNotFoundException
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "code": "NOT_FOUND"},
+    )
+
+
+@app.exception_handler(DuplicateIsbnException)
+def duplicate_isbn_handler(
+    request: Request, exc: DuplicateIsbnException
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "code": "DUPLICATE_ISBN"},
+    )
+
+
 # ═══════════════════════════════════════════════════════════
 # КАТЕГОРИИ
 # ═══════════════════════════════════════════════════════════
@@ -124,15 +166,15 @@ CATEGORIES: list[dict] = []
 @app.get("/categories")
 def list_categories():
     """GET /categories — список всех категорий."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    return CATEGORIES
 
 
 @app.post("/categories", status_code=201)
 def create_category(category: CategoryCreate):
     """POST /categories — создать категорию."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    created_category = {"id": _next_id(CATEGORIES), **category.model_dump()}
+    CATEGORIES.append(created_category)
+    return created_category
 
 
 # ═══════════════════════════════════════════════════════════
@@ -143,22 +185,30 @@ def create_category(category: CategoryCreate):
 @app.get("/books")
 def list_books(category_id: Optional[int] = None, year: Optional[int] = None):
     """GET /books — список книг. Опциональная фильтрация по category_id и year."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    return [
+        book
+        for book in BOOKS
+        if (category_id is None or book["category_id"] == category_id)
+        and (year is None or book["year"] == year)
+    ]
 
 
 @app.get("/books/search")
 def search_books(query: str):
     """GET /books/search?query=... — поиск по title и author (case-insensitive)."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    normalized_query = query.casefold()
+    return [
+        book
+        for book in BOOKS
+        if normalized_query in book["title"].casefold()
+        or normalized_query in book["author"].casefold()
+    ]
 
 
 @app.get("/books/{book_id}")
 def get_book(book_id: int):
     """GET /books/{id} — одна книга."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    return _get_book_or_raise(book_id)
 
 
 @app.post("/books", status_code=201)
@@ -167,19 +217,30 @@ def create_book(book: BookCreate):
 
     Проверять уникальность ISBN. Если дубликат — DuplicateIsbnException.
     """
-    # TODO: реализуйте
-    raise NotImplementedError
+    if any(stored_book["isbn"] == book.isbn for stored_book in BOOKS):
+        raise DuplicateIsbnException()
+
+    created_book = {"id": _next_id(BOOKS), **book.model_dump()}
+    BOOKS.append(created_book)
+    return created_book
 
 
 @app.put("/books/{book_id}")
 def update_book(book_id: int, book: BookCreate):
     """PUT /books/{id} — полностью обновить книгу."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    stored_book = _get_book_or_raise(book_id)
+    if any(
+        other_book["id"] != book_id and other_book["isbn"] == book.isbn
+        for other_book in BOOKS
+    ):
+        raise DuplicateIsbnException()
+
+    stored_book.update(book.model_dump())
+    return stored_book
 
 
 @app.delete("/books/{book_id}", status_code=204)
 def delete_book(book_id: int):
     """DELETE /books/{id} — удалить книгу."""
-    # TODO: реализуйте
-    raise NotImplementedError
+    stored_book = _get_book_or_raise(book_id)
+    BOOKS.remove(stored_book)
